@@ -9,17 +9,41 @@ const port = process.env.PORT || 5000;
 
 app.use(
   cors({
-    origin: ["https://assignment-9-client-side.vercel.app", "http://localhost:3000"],
+    origin: [
+      "https://assignment-9-client-side.vercel.app",
+      "http://localhost:3000",
+    ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   }),
 );
+
+app.use((req, res, next) => {
+  const allowedOrigins = [
+    "https://assignment-9-client-side.vercel.app",
+    "http://localhost:3000",
+  ];
+  const origin = req.headers.origin;
+
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json());
 
 const uri = process.env.MONGODB_URI;
 if (!uri) {
-  console.error("FATAL: MONGODB_URI environment variable is missing.");
   process.exit(1);
 }
 const client = new MongoClient(uri);
@@ -143,7 +167,6 @@ app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
 
     res.json(userComments);
   } catch (err) {
-    console.error("Database interaction pipeline mismatch:", err);
     res.status(500).json({ message: "Internal architecture matrix failure." });
   }
 });
@@ -427,12 +450,8 @@ app.get("/", (req, res) => {
 async function runServer() {
   try {
     await client.connect();
-    console.log("Ecosystem database nodes fully operational.");
-    app.listen(port, () => {
-      console.log(`Ecosystem hub serving logic pathways via port: ${port}`);
-    });
+    app.listen(port, () => {});
   } catch (err) {
-    console.error("Server lifecycle initialization failure:", err);
     process.exit(1);
   }
 }
