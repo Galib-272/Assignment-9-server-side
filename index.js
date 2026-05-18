@@ -140,6 +140,27 @@ app.get("/ideas", async (req, res) => {
   }
 });
 
+app.get("/ideas/:id", async (req, res) => {
+  try {
+    const parameterId = req.params.id;
+    let databaseQuery = {};
+    
+    if (ObjectId.isValid(parameterId)) {
+      databaseQuery = { _id: new ObjectId(parameterId) };
+    } else {
+      databaseQuery = { _id: parameterId };
+    }
+
+    const uniqueConcept = await db.collection("ideas").findOne(databaseQuery);
+    if (!uniqueConcept) {
+      return res.status(404).json({ message: "Target concept tracking index missing." });
+    }
+    res.json(uniqueConcept);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 
 
 app.listen(port, () => {
