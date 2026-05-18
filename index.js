@@ -120,6 +120,26 @@ app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
   }
 });
 
+app.get("/ideas", async (req, res) => {
+  try {
+    const { search, category } = req.query;
+    let databaseQuery = {};
+
+    if (category && category !== "All") {
+      databaseQuery.category = { $regex: `^${category}$`, $options: "i" };
+    }
+
+    if (search && search.trim() !== "") {
+      databaseQuery.title = { $regex: search.trim(), $options: "i" };
+    }
+
+    const repositoryCollection = await db.collection("ideas").find(databaseQuery).toArray();
+    res.json(repositoryCollection);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 
 
 app.listen(port, () => {
