@@ -53,6 +53,73 @@ app.post("/jwt", (req, res) => {
   res.json({ token });
 });
 
+app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ message: "Identity parameter missing." });
+    }
+
+    if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
+      return res.status(403).json({ message: "Identity parameter verification mismatch." });
+    }
+
+    const userComments = await db.collection("comments")
+      .aggregate([
+        { 
+          $match: { 
+            userEmail: { $regex: `^${email}$`, $options: "i" } 
+          } 
+        },
+        {
+          $addFields: {
+            convertIdeaId: {
+              $cond: {
+                if: { $eq: [{ $strLenCP: { $ifNull: ["$ideaId", ""] } }, 24] },
+                then: { $toObjectId: "$ideaId" },
+                else: "$ideaId"
+              }
+            }
+          }
+        },
+        {
+          $lookup: {
+            from: "ideas",
+            localField: "convertIdeaId",
+            foreignField: "_id",
+            as: "ideaDetails"
+          }
+        },
+        {
+          $unwind: {
+            path: "$ideaDetails",
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $project: {
+            _id: 1,
+            ideaId: 1,
+            text: 1,
+            userEmail: 1,
+            userName: 1,
+            timestamp: 1,
+            timestampRaw: 1,
+            ideaTitle: { $ifNull: ["$ideaDetails.title", "Archived Repository Concept"] }
+          }
+        },
+        { $sort: { timestampRaw: -1, _id: -1 } }
+      ])
+      .toArray();
+
+    res.json(userComments);
+  } catch (err) {
+    console.error("Database interaction pipeline mismatch:", err);
+    res.status(500).json({ message: "Internal architecture matrix failure." });
+  }
+});
+
 
 
 app.listen(port, () => {
