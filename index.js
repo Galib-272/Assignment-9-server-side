@@ -7,12 +7,20 @@ require("dotenv").config();
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 app.use(express.json());
 
-const uri =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://dbUser:vaultSecurePass123@cluster0.5a5dwrr.mongodb.net/ideaVaultDB?retryWrites=true&w=majority&appName=Cluster0";
+const uri = process.env.MONGODB_URI;
+if (!uri) {
+  console.error("FATAL: MONGODB_URI environment variable is missing.");
+  process.exit(1);
+}
 const client = new MongoClient(uri);
 
 let db;
@@ -37,19 +45,22 @@ function verifyEcosystemToken(req, res, next) {
   }
 
   const identityToken = authorizationHeader.split(" ")[1];
-  jwt.verify(
-    identityToken,
-    process.env.JWT_SECRET || "super_secret_cryptographic_vault_key_hash_2026",
-    (err, decoded) => {
-      if (err) {
-        return res
-          .status(403)
-          .json({ message: "Authorization parameters expired." });
-      }
-      req.decodedIdentity = decoded;
-      next();
-    },
-  );
+  const tokenSecret = process.env.JWT_SECRET;
+  if (!tokenSecret) {
+    return res
+      .status(500)
+      .json({ message: "Internal encryption key unconfigured." });
+  }
+
+  jwt.verify(identityToken, tokenSecret, (err, decoded) => {
+    if (err) {
+      return res
+        .status(403)
+        .json({ message: "Authorization parameters expired." });
+    }
+    req.decodedIdentity = decoded;
+    next();
+  });
 }
 
 app.post("/jwt", (req, res) => {
@@ -59,13 +70,16 @@ app.post("/jwt", (req, res) => {
       .status(400)
       .json({ message: "Identity signature parameters incomplete." });
   }
-  const token = jwt.sign(
-    profilePayload,
-    process.env.JWT_SECRET || "super_secret_cryptographic_vault_key_hash_2026",
-    {
-      expiresIn: "12h",
-    },
-  );
+  const tokenSecret = process.env.JWT_SECRET;
+  if (!tokenSecret) {
+    return res
+      .status(500)
+      .json({ message: "Internal encryption key unconfigured." });
+  }
+
+  const token = jwt.sign(profilePayload, tokenSecret, {
+    expiresIn: "12h",
+  });
   res.json({ token });
 });
 
@@ -210,6 +224,52 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
     res
       .status(201)
       .json({ success: true, insertedId: executionResponse.insertedId });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.put("/ideas/:id", verifyEcosystemToken, async (req, res) => {
+  try {
+    const ideaId = req.params.id;
+    const { title, shortDescription, targetAudience, estimatedBudget } =
+      req.body;
+
+    let databaseQuery = {};
+    if (ObjectId.isValid(ideaId)) {
+      databaseQuery = { _id: new ObjectId(ideaId) };
+    } else {
+      databaseQuery = { _id: ideaId };
+    }
+
+    const existingIdea = await db.collection("ideas").findOne(databaseQuery);
+    if (!existingIdea) {
+      return res
+        .status(404)
+        .json({ message: "Target concept document missing." });
+    }
+
+    const itemAuthor = existingIdea.userEmail || existingIdea.authorEmail;
+    if (
+      itemAuthor &&
+      itemAuthor.toLowerCase() !== req.decodedIdentity.email.toLowerCase()
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Unauthorized adjustment request." });
+    }
+
+    const updateResult = await db.collection("ideas").updateOne(databaseQuery, {
+      $set: {
+        title,
+        shortDescription,
+        targetAudience,
+        estimatedBudget,
+        timestampRaw: new Date().toISOString(),
+      },
+    });
+
+    res.json({ success: true, modifiedCount: updateResult.modifiedCount });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
