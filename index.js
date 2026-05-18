@@ -161,6 +161,28 @@ app.get("/ideas/:id", async (req, res) => {
   }
 });
 
+app.post("/ideas", verifyEcosystemToken, async (req, res) => {
+  try {
+    const newIdeaPayload = req.body;
+    
+    if (!newIdeaPayload.title || !newIdeaPayload.category) {
+      return res.status(400).json({ message: "Required concept initialization fields missing." });
+    }
+
+    const compiledIdeaDocument = {
+      ...newIdeaPayload,
+      userEmail: req.decodedIdentity.email,
+      authorEmail: req.decodedIdentity.email,
+      timestampRaw: new Date().toISOString()
+    };
+
+    const executionResponse = await db.collection("ideas").insertOne(compiledIdeaDocument);
+    res.status(201).json({ success: true, insertedId: executionResponse.insertedId });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 
 
 app.listen(port, () => {
