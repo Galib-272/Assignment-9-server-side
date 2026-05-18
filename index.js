@@ -183,6 +183,35 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
   }
 });
 
+app.delete("/ideas/:id", verifyEcosystemToken, async (req, res) => {
+  try {
+    const ideaId = req.params.id;
+    let databaseQuery = {};
+    if (ObjectId.isValid(ideaId)) {
+      databaseQuery = { _id: new ObjectId(ideaId) };
+    } else {
+      databaseQuery = { _id: ideaId };
+    }
+
+    const existingIdea = await db.collection("ideas").findOne(databaseQuery);
+    if (!existingIdea) {
+      return res.status(404).json({ message: "Target concept document missing." });
+    }
+
+    const itemAuthor = existingIdea.userEmail || existingIdea.authorEmail;
+    if (itemAuthor && itemAuthor.toLowerCase() !== req.decodedIdentity.email.toLowerCase()) {
+      return res.status(403).json({ message: "Unauthorized destruction request." });
+    }
+
+    await db.collection("ideas").deleteOne(databaseQuery);
+    await db.collection("comments").deleteMany({ ideaId: ideaId });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 
 
 app.listen(port, () => {
