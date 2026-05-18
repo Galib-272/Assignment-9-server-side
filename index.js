@@ -23,18 +23,9 @@ if (!uri) {
 }
 const client = new MongoClient(uri);
 
-let db;
-
-async function runConnectionPipeline() {
-  try {
-    await client.connect();
-    db = client.db("ideaVaultDB");
-    console.log("Ecosystem database nodes fully operational.");
-  } catch (err) {
-    console.error("Database initialization fault:", err);
-  }
+function getDatabaseContext() {
+  return client.db("ideaVaultDB");
 }
-runConnectionPipeline();
 
 function verifyEcosystemToken(req, res, next) {
   const authorizationHeader = req.headers.authorization;
@@ -97,6 +88,7 @@ app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
         .json({ message: "Identity parameter verification mismatch." });
     }
 
+    const db = getDatabaseContext();
     const userComments = await db
       .collection("comments")
       .aggregate([
@@ -168,6 +160,7 @@ app.get("/ideas", async (req, res) => {
       databaseQuery.title = { $regex: search.trim(), $options: "i" };
     }
 
+    const db = getDatabaseContext();
     const repositoryCollection = await db
       .collection("ideas")
       .find(databaseQuery)
@@ -189,6 +182,7 @@ app.get("/ideas/:id", async (req, res) => {
       databaseQuery = { _id: parameterId };
     }
 
+    const db = getDatabaseContext();
     const uniqueConcept = await db.collection("ideas").findOne(databaseQuery);
     if (!uniqueConcept) {
       return res
@@ -218,6 +212,7 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
       timestampRaw: new Date().toISOString(),
     };
 
+    const db = getDatabaseContext();
     const executionResponse = await db
       .collection("ideas")
       .insertOne(compiledIdeaDocument);
@@ -242,6 +237,7 @@ app.put("/ideas/:id", verifyEcosystemToken, async (req, res) => {
       databaseQuery = { _id: ideaId };
     }
 
+    const db = getDatabaseContext();
     const existingIdea = await db.collection("ideas").findOne(databaseQuery);
     if (!existingIdea) {
       return res
@@ -285,6 +281,7 @@ app.delete("/ideas/:id", verifyEcosystemToken, async (req, res) => {
       databaseQuery = { _id: ideaId };
     }
 
+    const db = getDatabaseContext();
     const existingIdea = await db.collection("ideas").findOne(databaseQuery);
     if (!existingIdea) {
       return res
@@ -314,6 +311,7 @@ app.delete("/ideas/:id", verifyEcosystemToken, async (req, res) => {
 app.get("/comments/:ideaId", async (req, res) => {
   try {
     const ideaId = req.params.ideaId;
+    const db = getDatabaseContext();
     const items = await db
       .collection("comments")
       .find({ ideaId: ideaId })
@@ -328,6 +326,7 @@ app.get("/comments/:ideaId", async (req, res) => {
 app.post("/comments", verifyEcosystemToken, async (req, res) => {
   try {
     const targetCommentBlock = req.body;
+    const db = getDatabaseContext();
     const executionResponse = await db.collection("comments").insertOne({
       ...targetCommentBlock,
       timestampRaw: new Date().toISOString(),
@@ -356,6 +355,7 @@ app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
       databaseQuery = { _id: commentId };
     }
 
+    const db = getDatabaseContext();
     const existingComment = await db
       .collection("comments")
       .findOne(databaseQuery);
@@ -396,6 +396,7 @@ app.delete("/comments/:id", verifyEcosystemToken, async (req, res) => {
       databaseQuery = { _id: commentId };
     }
 
+    const db = getDatabaseContext();
     const existingComment = await db
       .collection("comments")
       .findOne(databaseQuery);
@@ -422,6 +423,17 @@ app.get("/", (req, res) => {
   res.json({ matrixStatus: "IdeaVault centralized processing engine online." });
 });
 
-app.listen(port, () => {
-  console.log(`Ecosystem hub serving logic pathways via port: ${port}`);
-});
+async function runServer() {
+  try {
+    await client.connect();
+    console.log("Ecosystem database nodes fully operational.");
+    app.listen(port, () => {
+      console.log(`Ecosystem hub serving logic pathways via port: ${port}`);
+    });
+  } catch (err) {
+    console.error("Server lifecycle initialization failure:", err);
+    process.exit(1);
+  }
+}
+
+runServer();
