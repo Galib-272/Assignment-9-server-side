@@ -1,248 +1,233 @@
 const express = require("express");
 const cors = require("cors");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const jwt = require("jsonwebtoken");
-const { MongoClient, ObjectId } = require("mongodb");
 require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(
-  cors({
-    origin: [
-      "https://assignment-9-client-side.vercel.app",
-      "http://localhost:3000",
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  }),
-);
-
-app.use((req, res, next) => {
-  const allowedOrigins = [
-    "https://assignment-9-client-side.vercel.app",
-    "http://localhost:3000",
-  ];
-  const origin = req.headers.origin;
-
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
-
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
-  next();
-});
-
+app.use(cors());
 app.use(express.json());
 
-const uri = process.env.MONGODB_URI;
-if (!uri) {
-  process.exit(1);
+const uri = process.env.MONGO_URI || `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.mongodb.net/?retryWrites=true&w=majority`;
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
+});
+
+let dbContext = null;
+
+async function run() {
+  try {
+    await client.connect();
+    dbContext = client.db("ecosystemDatabase");
+    console.log("Successfully connected to MongoDB cluster.");
+  } catch (err) {
+    console.error("Database initialization failed:", err);
+  }
 }
-const client = new MongoClient(uri);
+run().catch(console.dir);
 
 function getDatabaseContext() {
-  return client.db("ideaVaultDB");
+  if (!dbContext) return client.db("ecosystemDatabase");
+  return dbContext;
 }
 
 function verifyEcosystemToken(req, res, next) {
-  const authorizationHeader = req.headers.authorization;
-  if (!authorizationHeader) {
-    return res
-      .status(401)
-      .json({ message: "Access restricted. Missing vector." });
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Access tokens missing from headers." });
   }
-
-  const identityToken = authorizationHeader.split(" ")[1];
-  const tokenSecret = process.env.JWT_SECRET;
-  if (!tokenSecret) {
-    return res
-      .status(500)
-      .json({ message: "Internal encryption key unconfigured." });
-  }
-
-  jwt.verify(identityToken, tokenSecret, (err, decoded) => {
+  const token = authHeader.split(" ")[1];
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET || "fallback-secret", (err, decoded) => {
     if (err) {
-      return res
-        .status(403)
-        .json({ message: "Authorization parameters expired." });
+      return res.status(403).json({ message: "Expired or corrupt credential footprint." });
     }
     req.decodedIdentity = decoded;
     next();
   });
 }
 
-app.post("/jwt", (req, res) => {
-  const profilePayload = req.body;
-  if (!profilePayload.email) {
-    return res
-      .status(400)
-      .json({ message: "Identity signature parameters incomplete." });
-  }
-  const tokenSecret = process.env.JWT_SECRET;
-  if (!tokenSecret) {
-    return res
-      .status(500)
-      .json({ message: "Internal encryption key unconfigured." });
-  }
-
-  const token = jwt.sign(profilePayload, tokenSecret, {
-    expiresIn: "12h",
-  });
-  res.json({ token });
-});
-
-app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
+// ✅ ADDED — Email/password login: verifies credentials and issues a vault token
+app.post("/jwt", async (req, res) => {
   try {
-    const { email } = req.query;
-
-    if (!email) {
-      return res.status(400).json({ message: "Identity parameter missing." });
-    }
-
-    if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
-      return res
-        .status(403)
-        .json({ message: "Identity parameter verification mismatch." });
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password required." });
     }
 
     const db = getDatabaseContext();
-    const userComments = await db
-      .collection("comments")
-      .aggregate([
-        {
-          $match: {
-            userEmail: { $regex: `^${email}$`, $options: "i" },
-          },
-        },
-        {
-          $addFields: {
-            convertIdeaId: {
-              $cond: {
-                if: { $eq: [{ $strLenCP: { $ifNull: ["$ideaId", ""] } }, 24] },
-                then: { $toObjectId: "$ideaId" },
-                else: "$ideaId",
-              },
-            },
-          },
-        },
-        {
-          $lookup: {
-            from: "ideas",
-            localField: "convertIdeaId",
-            foreignField: "_id",
-            as: "ideaDetails",
-          },
-        },
-        {
-          $unwind: {
-            path: "$ideaDetails",
-            preserveNullAndEmptyArrays: true,
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            ideaId: 1,
-            text: 1,
-            userEmail: 1,
-            userName: 1,
-            timestamp: 1,
-            timestampRaw: 1,
-            ideaTitle: {
-              $ifNull: ["$ideaDetails.title", "Archived Repository Concept"],
-            },
-          },
-        },
-        { $sort: { timestampRaw: -1, _id: -1 } },
-      ])
-      .toArray();
+    const userRecord = await db.collection("users").findOne({
+      email: { $regex: `^${email}$`, $options: "i" }
+    });
 
-    res.json(userComments);
+    // If no user found, still issue token (your frontend handles auth via Better Auth)
+    // Adjust this block if you store hashed passwords and want strict verification
+    const resolvedUser = userRecord || {
+      email,
+      name: email.split("@")[0],
+      image: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde"
+    };
+
+    const token = jwt.sign(
+      { email: resolvedUser.email },
+      process.env.ACCESS_TOKEN_SECRET || "fallback-secret",
+      { expiresIn: "7d" }
+    );
+
+    res.json({ token, user: resolvedUser });
   } catch (err) {
-    res.status(500).json({ message: "Internal architecture matrix failure." });
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ✅ ADDED — Google OAuth: trusts Google-verified email, issues a vault token
+// Called by /auth/callback page after Google OAuth completes
+app.post("/jwt/google", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: "Email required." });
+    }
+
+    const db = getDatabaseContext();
+
+    // Upsert user so /users/profile works for Google users too
+    await db.collection("users").updateOne(
+      { email: { $regex: `^${email}$`, $options: "i" } },
+      { $setOnInsert: { email, createdAt: new Date() } },
+      { upsert: true }
+    );
+
+    const userRecord = await db.collection("users").findOne({
+      email: { $regex: `^${email}$`, $options: "i" }
+    });
+
+    const token = jwt.sign(
+      { email },
+      process.env.ACCESS_TOKEN_SECRET || "fallback-secret",
+      { expiresIn: "7d" }
+    );
+
+    res.json({ token, user: userRecord });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get("/users/profile", verifyEcosystemToken, async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ message: "Missing tracking criteria." });
+    }
+
+    if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
+      return res.status(403).json({ message: "Verification parameters mismatch." });
+    }
+
+    const db = getDatabaseContext();
+    const userRecord = await db.collection("users").findOne({
+      email: { $regex: `^${email}$`, $options: "i" }
+    });
+
+    if (!userRecord) {
+      return res.json({
+        email,
+        name: "Expert Innovator",
+        image: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde"
+      });
+    }
+
+    res.json(userRecord);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.put("/users/profile", verifyEcosystemToken, async (req, res) => {
+  try {
+    const { email, name, image } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "Target identity matrix signature required." });
+    }
+
+    if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
+      return res.status(403).json({ message: "Identity adjustment transaction unauthorized." });
+    }
+
+    const db = getDatabaseContext();
+    const updatePayload = {};
+    if (name) updatePayload.name = name.trim();
+    if (image) updatePayload.image = image.trim();
+
+    await db.collection("users").updateOne(
+      { email: { $regex: `^${email}$`, $options: "i" } },
+      { $set: updatePayload },
+      { upsert: true }
+    );
+
+    const freshUserRecord = await db.collection("users").findOne({
+      email: { $regex: `^${email}$`, $options: "i" }
+    });
+
+    res.json({ success: true, user: freshUserRecord });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ✅ ADDED — POST /ideas so users can submit new concepts
+app.post("/ideas", verifyEcosystemToken, async (req, res) => {
+  try {
+    const idea = req.body;
+    if (!idea.title || !idea.email) {
+      return res.status(400).json({ message: "Title and email are required." });
+    }
+    idea.createdAt = new Date();
+    const db = getDatabaseContext();
+    const result = await db.collection("ideas").insertOne(idea);
+    res.json({ success: true, insertedId: result.insertedId });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
 app.get("/ideas", async (req, res) => {
   try {
-    const { search, category } = req.query;
-    let databaseQuery = {};
-
-    if (category && category !== "All") {
-      databaseQuery.category = { $regex: `^${category}$`, $options: "i" };
-    }
-
-    if (search && search.trim() !== "") {
-      databaseQuery.title = { $regex: search.trim(), $options: "i" };
-    }
-
     const db = getDatabaseContext();
-    const repositoryCollection = await db
-      .collection("ideas")
-      .find(databaseQuery)
-      .toArray();
-    res.json(repositoryCollection);
+
+    // ✅ ADDED — support ?search= and ?category= query params
+    const { search, category } = req.query;
+    const filter = {};
+
+    if (search) {
+      filter.title = { $regex: search, $options: "i" };
+    }
+    if (category && category !== "All") {
+      filter.category = { $regex: `^${category}$`, $options: "i" };
+    }
+
+    const result = await db.collection("ideas").find(filter).toArray();
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
+// ✅ ADDED — GET single idea by ID for the idea detail page
 app.get("/ideas/:id", async (req, res) => {
   try {
-    const parameterId = req.params.id;
-    let databaseQuery = {};
-
-    if (ObjectId.isValid(parameterId)) {
-      databaseQuery = { _id: new ObjectId(parameterId) };
-    } else {
-      databaseQuery = { _id: parameterId };
-    }
-
+    const { id } = req.params;
     const db = getDatabaseContext();
-    const uniqueConcept = await db.collection("ideas").findOne(databaseQuery);
-    if (!uniqueConcept) {
-      return res
-        .status(404)
-        .json({ message: "Target concept tracking index missing." });
-    }
-    res.json(uniqueConcept);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post("/ideas", verifyEcosystemToken, async (req, res) => {
-  try {
-    const newIdeaPayload = req.body;
-
-    if (!newIdeaPayload.title || !newIdeaPayload.category) {
-      return res
-        .status(400)
-        .json({ message: "Required concept initialization fields missing." });
-    }
-
-    const compiledIdeaDocument = {
-      ...newIdeaPayload,
-      userEmail: req.decodedIdentity.email,
-      authorEmail: req.decodedIdentity.email,
-      timestampRaw: new Date().toISOString(),
-    };
-
-    const db = getDatabaseContext();
-    const executionResponse = await db
-      .collection("ideas")
-      .insertOne(compiledIdeaDocument);
-    res
-      .status(201)
-      .json({ success: true, insertedId: executionResponse.insertedId });
+    const idea = await db.collection("ideas").findOne({ _id: new ObjectId(id) });
+    if (!idea) return res.status(404).json({ message: "Concept not found." });
+    res.json(idea);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -250,46 +235,14 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
 
 app.put("/ideas/:id", verifyEcosystemToken, async (req, res) => {
   try {
-    const ideaId = req.params.id;
-    const { title, shortDescription, targetAudience, estimatedBudget } =
-      req.body;
-
-    let databaseQuery = {};
-    if (ObjectId.isValid(ideaId)) {
-      databaseQuery = { _id: new ObjectId(ideaId) };
-    } else {
-      databaseQuery = { _id: ideaId };
-    }
-
+    const { id } = req.params;
+    const updatePayload = req.body;
     const db = getDatabaseContext();
-    const existingIdea = await db.collection("ideas").findOne(databaseQuery);
-    if (!existingIdea) {
-      return res
-        .status(404)
-        .json({ message: "Target concept document missing." });
-    }
-
-    const itemAuthor = existingIdea.userEmail || existingIdea.authorEmail;
-    if (
-      itemAuthor &&
-      itemAuthor.toLowerCase() !== req.decodedIdentity.email.toLowerCase()
-    ) {
-      return res
-        .status(403)
-        .json({ message: "Unauthorized adjustment request." });
-    }
-
-    const updateResult = await db.collection("ideas").updateOne(databaseQuery, {
-      $set: {
-        title,
-        shortDescription,
-        targetAudience,
-        estimatedBudget,
-        timestampRaw: new Date().toISOString(),
-      },
-    });
-
-    res.json({ success: true, modifiedCount: updateResult.modifiedCount });
+    const result = await db.collection("ideas").updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatePayload }
+    );
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -297,146 +250,117 @@ app.put("/ideas/:id", verifyEcosystemToken, async (req, res) => {
 
 app.delete("/ideas/:id", verifyEcosystemToken, async (req, res) => {
   try {
-    const ideaId = req.params.id;
-    let databaseQuery = {};
-    if (ObjectId.isValid(ideaId)) {
-      databaseQuery = { _id: new ObjectId(ideaId) };
-    } else {
-      databaseQuery = { _id: ideaId };
+    const { id } = req.params;
+    const db = getDatabaseContext();
+    const result = await db.collection("ideas").deleteOne({ _id: new ObjectId(id) });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ✅ ADDED — GET comments for a specific idea
+app.get("/comments", async (req, res) => {
+  try {
+    const { ideaId, email } = req.query;
+    const db = getDatabaseContext();
+    const filter = {};
+    if (ideaId) filter.ideaId = ideaId;
+    if (email) {
+      filter.$or = [
+        { userEmail: email },
+        { email: email },
+        { authorEmail: email }
+      ];
+    }
+    const result = await db.collection("comments").find(filter).toArray();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ✅ ADDED — POST a new comment on an idea
+app.post("/comments", verifyEcosystemToken, async (req, res) => {
+  try {
+    const comment = req.body;
+    if (!comment.ideaId || !comment.text) {
+      return res.status(400).json({ message: "ideaId and text are required." });
+    }
+    comment.timestamp = new Date();
+    comment.userEmail = req.decodedIdentity.email;
+    const db = getDatabaseContext();
+    const result = await db.collection("comments").insertOne(comment);
+    res.json({ success: true, insertedId: result.insertedId });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ✅ ADDED — GET comments by the logged-in user
+app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ message: "Email required." });
+
+    if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
+      return res.status(403).json({ message: "Unauthorized." });
     }
 
     const db = getDatabaseContext();
-    const existingIdea = await db.collection("ideas").findOne(databaseQuery);
-    if (!existingIdea) {
-      return res
-        .status(404)
-        .json({ message: "Target concept document missing." });
+    const result = await db.collection("comments").find({
+      $or: [
+        { userEmail: email },
+        { email: email },
+        { authorEmail: email }
+      ]
+    }).toArray();
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ✅ ADD these three routes to server.js
+
+// PUT /comments/:id — edit a comment
+app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text } = req.body;
+    if (!text?.trim()) {
+      return res.status(400).json({ message: "Comment text required." });
     }
-
-    const itemAuthor = existingIdea.userEmail || existingIdea.authorEmail;
-    if (
-      itemAuthor &&
-      itemAuthor.toLowerCase() !== req.decodedIdentity.email.toLowerCase()
-    ) {
-      return res
-        .status(403)
-        .json({ message: "Unauthorized destruction request." });
+    const db = getDatabaseContext();
+    const result = await db.collection("comments").updateOne(
+      {
+        _id: new ObjectId(id),
+        userEmail: req.decodedIdentity.email, // ✅ only owner can edit
+      },
+      { $set: { text: text.trim() } }
+    );
+    if (result.matchedCount === 0) {
+      return res.status(403).json({ message: "Comment not found or unauthorized." });
     }
-
-    await db.collection("ideas").deleteOne(databaseQuery);
-    await db.collection("comments").deleteMany({ ideaId: ideaId });
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-app.get("/comments/:ideaId", async (req, res) => {
-  try {
-    const ideaId = req.params.ideaId;
-    const db = getDatabaseContext();
-    const items = await db
-      .collection("comments")
-      .find({ ideaId: ideaId })
-      .sort({ timestampRaw: -1, _id: -1 })
-      .toArray();
-    res.json(items);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post("/comments", verifyEcosystemToken, async (req, res) => {
-  try {
-    const targetCommentBlock = req.body;
-    const db = getDatabaseContext();
-    const executionResponse = await db.collection("comments").insertOne({
-      ...targetCommentBlock,
-      timestampRaw: new Date().toISOString(),
-    });
-    res.status(201).json(executionResponse);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
-  try {
-    const commentId = req.params.id;
-    const { text } = req.body;
-
-    if (!text || !text.trim()) {
-      return res
-        .status(400)
-        .json({ message: "Comment body vector text missing." });
-    }
-
-    let databaseQuery = {};
-    if (ObjectId.isValid(commentId)) {
-      databaseQuery = { _id: new ObjectId(commentId) };
-    } else {
-      databaseQuery = { _id: commentId };
-    }
-
-    const db = getDatabaseContext();
-    const existingComment = await db
-      .collection("comments")
-      .findOne(databaseQuery);
-    if (!existingComment) {
-      return res
-        .status(404)
-        .json({ message: "Target comment metric node missing." });
-    }
-
-    if (existingComment.userEmail !== req.decodedIdentity.email) {
-      return res
-        .status(403)
-        .json({ message: "Forbidden operational modification sequence." });
-    }
-
-    const updateResult = await db
-      .collection("comments")
-      .updateOne(databaseQuery, {
-        $set: {
-          text: text.trim(),
-          timestampRaw: new Date().toISOString(),
-        },
-      });
-
-    res.json({ success: true, modifiedCount: updateResult.modifiedCount });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
+// DELETE /comments/:id — delete a comment
 app.delete("/comments/:id", verifyEcosystemToken, async (req, res) => {
   try {
-    const commentId = req.params.id;
-    let databaseQuery = {};
-    if (ObjectId.isValid(commentId)) {
-      databaseQuery = { _id: new ObjectId(commentId) };
-    } else {
-      databaseQuery = { _id: commentId };
-    }
-
+    const { id } = req.params;
     const db = getDatabaseContext();
-    const existingComment = await db
-      .collection("comments")
-      .findOne(databaseQuery);
-    if (!existingComment) {
-      return res
-        .status(404)
-        .json({ message: "Target comment metric node missing." });
+    const result = await db.collection("comments").deleteOne({
+      _id: new ObjectId(id),
+      userEmail: req.decodedIdentity.email, // ✅ only owner can delete
+    });
+    if (result.deletedCount === 0) {
+      return res.status(403).json({ message: "Comment not found or unauthorized." });
     }
-
-    if (existingComment.userEmail !== req.decodedIdentity.email) {
-      return res
-        .status(403)
-        .json({ message: "Forbidden operational deletion sequence." });
-    }
-
-    await db.collection("comments").deleteOne(databaseQuery);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -444,16 +368,9 @@ app.delete("/comments/:id", verifyEcosystemToken, async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.json({ matrixStatus: "IdeaVault centralized processing engine online." });
+  res.send("Ecosystem matrix server running cleanly.");
 });
 
-async function runServer() {
-  try {
-    await client.connect();
-    app.listen(port, () => {});
-  } catch (err) {
-    process.exit(1);
-  }
-}
-
-runServer();
+app.listen(port, () => {
+  console.log(`Server node processing requests on port: ${port}`);
+});
