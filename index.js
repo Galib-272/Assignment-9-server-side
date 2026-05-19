@@ -32,7 +32,7 @@ let dbContext = null;
 
 function getDatabaseContext() {
   if (!dbContext) {
-    return client.db("ideaVaultDB");
+    dbContext = client.db("ideaVaultDB");
   }
   return dbContext;
 }
@@ -217,7 +217,7 @@ app.get("/ideas", async (req, res) => {
     const filter = {};
 
     if (defaultOnly === "true") {
-      filter.isDefault = true;
+      filter.$or = [{ isDefault: true }, { isDefault: "true" }];
     }
     if (search) {
       filter.title = { $regex: search, $options: "i" };
