@@ -18,9 +18,7 @@ app.use(
 );
 app.use(express.json());
 
-const uri =
-  process.env.MONGO_URI ||
-  `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.mongodb.net/?retryWrites=true&w=majority`;
+const uri = process.env.MONGODB_URI;
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -31,35 +29,34 @@ const client = new MongoClient(uri, {
 
 let dbContext = null;
 
-async function run() {
-  try {
-    await client.connect();
-    dbContext = client.db("ideaVaultDB");
-    console.log("Successfully connected to MongoDB cluster.");
-  } catch (err) {
-    console.error("Database initialization failed:", err);
-  }
-}
-run().catch(console.dir);
-
 function getDatabaseContext() {
-  if (!dbContext) return client.db("ideaVaultDB");
+  if (!dbContext) {
+    return client.db("ideaVaultDB");
+  }
   return dbContext;
 }
 
 function verifyEcosystemToken(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "Access tokens missing from headers." });
+    return res
+      .status(401)
+      .json({ message: "Access tokens missing from headers." });
   }
   const token = authHeader.split(" ")[1];
-  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET || "fallback-secret", (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ message: "Expired or corrupt credential footprint." });
-    }
-    req.decodedIdentity = decoded;
-    next();
-  });
+  jwt.verify(
+    token,
+    process.env.JWT_SECRET || "fallback-secret",
+    (err, decoded) => {
+      if (err) {
+        return res
+          .status(403)
+          .json({ message: "Expired or corrupt credential footprint." });
+      }
+      req.decodedIdentity = decoded;
+      next();
+    },
+  );
 }
 
 app.post("/jwt", async (req, res) => {
@@ -68,24 +65,28 @@ app.post("/jwt", async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password required." });
     }
-
     const db = getDatabaseContext();
-    const userRecord = await db.collection("users").findOne({
-      email: { $regex: `^${email}$`, $options: "i" },
-    });
+    const userRecord = await db
+      .collection("user")
+      .findOne({ email: { $regex: `^${email}$`, $options: "i" } });
 
-    const resolvedUser = userRecord || {
-      email,
-      name: email.split("@")[0],
-      image: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde",
+    if (!userRecord) {
+      return res
+        .status(401)
+        .json({ message: "No account found with this email." });
+    }
+
+    const resolvedUser = {
+      email: userRecord.email,
+      name: userRecord.name || email.split("@")[0],
+      image: userRecord.image || null,
     };
 
     const token = jwt.sign(
       { email: resolvedUser.email },
-      process.env.ACCESS_TOKEN_SECRET || "fallback-secret",
+      process.env.JWT_SECRET || "fallback-secret",
       { expiresIn: "7d" },
     );
-
     res.json({ token, user: resolvedUser });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -100,25 +101,32 @@ app.post("/jwt/google", async (req, res) => {
     }
 
     const db = getDatabaseContext();
+    const cleanEmail = email.trim();
 
-    await db.collection("users").updateOne(
-      { email: { $regex: `^${email}$`, $options: "i" } },
-      { $setOnInsert: { email, createdAt: new Date() } },
-      { upsert: true },
-    );
-
-    const userRecord = await db.collection("users").findOne({
-      email: { $regex: `^${email}$`, $options: "i" },
+    let userRecord = await db.collection("users").findOne({
+      email: { $regex: `^${cleanEmail}$`, $options: "i" },
     });
 
+    if (!userRecord) {
+      const newUser = {
+        email: cleanEmail,
+        name: cleanEmail.split("@")[0],
+        image: null,
+        createdAt: new Date(),
+      };
+      const result = await db.collection("users").insertOne(newUser);
+      userRecord = { _id: result.insertedId, ...newUser };
+    }
+
     const token = jwt.sign(
-      { email },
-      process.env.ACCESS_TOKEN_SECRET || "fallback-secret",
+      { email: userRecord.email },
+      process.env.JWT_SECRET || "fallback-secret",
       { expiresIn: "7d" },
     );
 
     res.json({ token, user: userRecord });
   } catch (err) {
+    console.error("Backend /jwt/google route internal crash:", err);
     res.status(500).json({ message: err.message });
   }
 });
@@ -129,24 +137,22 @@ app.get("/users/profile", verifyEcosystemToken, async (req, res) => {
     if (!email) {
       return res.status(400).json({ message: "Missing tracking criteria." });
     }
-
     if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
-      return res.status(403).json({ message: "Verification parameters mismatch." });
+      return res
+        .status(403)
+        .json({ message: "Verification parameters mismatch." });
     }
-
     const db = getDatabaseContext();
     const userRecord = await db.collection("users").findOne({
       email: { $regex: `^${email}$`, $options: "i" },
     });
-
     if (!userRecord) {
       return res.json({
         email,
         name: "Expert Innovator",
-        image: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde",
+        image: null,
       });
     }
-
     res.json(userRecord);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -156,30 +162,30 @@ app.get("/users/profile", verifyEcosystemToken, async (req, res) => {
 app.put("/users/profile", verifyEcosystemToken, async (req, res) => {
   try {
     const { email, name, image } = req.body;
-
     if (!email) {
-      return res.status(400).json({ message: "Target identity matrix signature required." });
+      return res
+        .status(400)
+        .json({ message: "Target identity matrix signature required." });
     }
-
     if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
-      return res.status(403).json({ message: "Identity adjustment transaction unauthorized." });
+      return res
+        .status(403)
+        .json({ message: "Identity adjustment transaction unauthorized." });
     }
-
     const db = getDatabaseContext();
     const updatePayload = {};
     if (name) updatePayload.name = name.trim();
     if (image) updatePayload.image = image.trim();
-
-    await db.collection("users").updateOne(
-      { email: { $regex: `^${email}$`, $options: "i" } },
-      { $set: updatePayload },
-      { upsert: true },
-    );
-
+    await db
+      .collection("users")
+      .updateOne(
+        { email: { $regex: `^${email}$`, $options: "i" } },
+        { $set: updatePayload },
+        { upsert: true },
+      );
     const freshUserRecord = await db.collection("users").findOne({
       email: { $regex: `^${email}$`, $options: "i" },
     });
-
     res.json({ success: true, user: freshUserRecord });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -193,6 +199,7 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
       return res.status(400).json({ message: "Title and email are required." });
     }
     idea.createdAt = new Date();
+    idea.isDefault = false;
     const db = getDatabaseContext();
     const result = await db.collection("ideas").insertOne(idea);
     res.json({ success: true, insertedId: result.insertedId });
@@ -202,11 +209,15 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
 });
 
 app.get("/ideas", async (req, res) => {
+  res.set("Cache-Control", "no-store");
   try {
     const db = getDatabaseContext();
-    const { search, category } = req.query;
+    const { search, category, defaultOnly, limit } = req.query;
     const filter = {};
 
+    if (defaultOnly === "true") {
+      filter.isDefault = true;
+    }
     if (search) {
       filter.title = { $regex: search, $options: "i" };
     }
@@ -214,9 +225,16 @@ app.get("/ideas", async (req, res) => {
       filter.category = { $regex: `^${category}$`, $options: "i" };
     }
 
-    const result = await db.collection("ideas").find(filter).toArray();
+    let queryCursor = db.collection("ideas").find(filter);
+
+    if (limit) {
+      queryCursor = queryCursor.limit(parseInt(limit, 10));
+    }
+
+    const result = await queryCursor.toArray();
     res.json(result);
   } catch (err) {
+    console.error("Error fetching ideas:", err);
     res.status(500).json({ message: err.message });
   }
 });
@@ -225,7 +243,9 @@ app.get("/ideas/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const db = getDatabaseContext();
-    const idea = await db.collection("ideas").findOne({ _id: new ObjectId(id) });
+    const idea = await db
+      .collection("ideas")
+      .findOne({ _id: new ObjectId(id) });
     if (!idea) return res.status(404).json({ message: "Concept not found." });
     res.json(idea);
   } catch (err) {
@@ -238,10 +258,9 @@ app.put("/ideas/:id", verifyEcosystemToken, async (req, res) => {
     const { id } = req.params;
     const updatePayload = req.body;
     const db = getDatabaseContext();
-    const result = await db.collection("ideas").updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updatePayload },
-    );
+    const result = await db
+      .collection("ideas")
+      .updateOne({ _id: new ObjectId(id) }, { $set: updatePayload });
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -252,7 +271,9 @@ app.delete("/ideas/:id", verifyEcosystemToken, async (req, res) => {
   try {
     const { id } = req.params;
     const db = getDatabaseContext();
-    const result = await db.collection("ideas").deleteOne({ _id: new ObjectId(id) });
+    const result = await db
+      .collection("ideas")
+      .deleteOne({ _id: new ObjectId(id) });
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -299,16 +320,16 @@ app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
   try {
     const { email } = req.query;
     if (!email) return res.status(400).json({ message: "Email required." });
-
     if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
       return res.status(403).json({ message: "Unauthorized." });
     }
-
     const db = getDatabaseContext();
-    const result = await db.collection("comments").find({
-      $or: [{ userEmail: email }, { email: email }, { authorEmail: email }],
-    }).toArray();
-
+    const result = await db
+      .collection("comments")
+      .find({
+        $or: [{ userEmail: email }, { email: email }, { authorEmail: email }],
+      })
+      .toArray();
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -323,15 +344,16 @@ app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
       return res.status(400).json({ message: "Comment text required." });
     }
     const db = getDatabaseContext();
-    const result = await db.collection("comments").updateOne(
-      {
-        _id: new ObjectId(id),
-        userEmail: req.decodedIdentity.email,
-      },
-      { $set: { text: text.trim() } },
-    );
+    const result = await db
+      .collection("comments")
+      .updateOne(
+        { _id: new ObjectId(id), userEmail: req.decodedIdentity.email },
+        { $set: { text: text.trim() } },
+      );
     if (result.matchedCount === 0) {
-      return res.status(403).json({ message: "Comment not found or unauthorized." });
+      return res
+        .status(403)
+        .json({ message: "Comment not found or unauthorized." });
     }
     res.json({ success: true });
   } catch (err) {
@@ -348,7 +370,9 @@ app.delete("/comments/:id", verifyEcosystemToken, async (req, res) => {
       userEmail: req.decodedIdentity.email,
     });
     if (result.deletedCount === 0) {
-      return res.status(403).json({ message: "Comment not found or unauthorized." });
+      return res
+        .status(403)
+        .json({ message: "Comment not found or unauthorized." });
     }
     res.json({ success: true });
   } catch (err) {
@@ -360,6 +384,19 @@ app.get("/", (req, res) => {
   res.send("Ecosystem matrix server running cleanly.");
 });
 
-app.listen(port, () => {
-  console.log(`Server node processing requests on port: ${port}`);
-});
+async function runServer() {
+  try {
+    await client.connect();
+    dbContext = client.db("ideaVaultDB");
+    console.log("Successfully connected to MongoDB cluster.");
+
+    app.listen(port, () => {
+      console.log(`Server node processing requests on port: ${port}`);
+    });
+  } catch (err) {
+    console.error("Server initialization blocked by database failure:", err);
+    process.exit(1);
+  }
+}
+
+runServer();
