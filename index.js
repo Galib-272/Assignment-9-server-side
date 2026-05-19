@@ -30,8 +30,10 @@ const client = new MongoClient(uri, {
 
 let dbContext = null;
 
-function getDatabaseContext() {
+// FIX: Establish persistent async serverless pooling context safely
+async function getDatabaseContext() {
   if (!dbContext) {
+    await client.connect();
     dbContext = client.db("ideaVaultDB");
   }
   return dbContext;
@@ -66,7 +68,7 @@ app.post("/jwt", async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password required." });
     }
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const userRecord = await db
       .collection("user")
       .findOne({ email: { $regex: `^${email}$`, $options: "i" } });
@@ -101,7 +103,7 @@ app.post("/jwt/google", async (req, res) => {
       return res.status(400).json({ message: "Email required." });
     }
 
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const cleanEmail = email.trim();
 
     let userRecord = await db.collection("users").findOne({
@@ -143,7 +145,7 @@ app.get("/users/profile", verifyEcosystemToken, async (req, res) => {
         .status(403)
         .json({ message: "Verification parameters mismatch." });
     }
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const userRecord = await db.collection("users").findOne({
       email: { $regex: `^${email}$`, $options: "i" },
     });
@@ -173,7 +175,7 @@ app.put("/users/profile", verifyEcosystemToken, async (req, res) => {
         .status(403)
         .json({ message: "Identity adjustment transaction unauthorized." });
     }
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const updatePayload = {};
     if (name) updatePayload.name = name.trim();
     if (image) updatePayload.image = image.trim();
@@ -201,7 +203,7 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
     }
     idea.createdAt = new Date();
     idea.isDefault = false;
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const result = await db.collection("ideas").insertOne(idea);
     res.json({ success: true, insertedId: result.insertedId });
   } catch (err) {
@@ -212,7 +214,7 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
 app.get("/ideas", async (req, res) => {
   res.set("Cache-Control", "no-store");
   try {
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const { search, category, defaultOnly, limit } = req.query;
     const filter = {};
 
@@ -243,7 +245,7 @@ app.get("/ideas", async (req, res) => {
 app.get("/ideas/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const idea = await db
       .collection("ideas")
       .findOne({ _id: new ObjectId(id) });
@@ -258,7 +260,7 @@ app.put("/ideas/:id", verifyEcosystemToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updatePayload = req.body;
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const result = await db
       .collection("ideas")
       .updateOne({ _id: new ObjectId(id) }, { $set: updatePayload });
@@ -271,7 +273,7 @@ app.put("/ideas/:id", verifyEcosystemToken, async (req, res) => {
 app.delete("/ideas/:id", verifyEcosystemToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const result = await db
       .collection("ideas")
       .deleteOne({ _id: new ObjectId(id) });
@@ -284,7 +286,7 @@ app.delete("/ideas/:id", verifyEcosystemToken, async (req, res) => {
 app.get("/comments", async (req, res) => {
   try {
     const { ideaId, email } = req.query;
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const filter = {};
     if (ideaId) filter.ideaId = ideaId;
     if (email) {
@@ -309,7 +311,7 @@ app.post("/comments", verifyEcosystemToken, async (req, res) => {
     }
     comment.timestamp = new Date();
     comment.userEmail = req.decodedIdentity.email;
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const result = await db.collection("comments").insertOne(comment);
     res.json({ success: true, insertedId: result.insertedId });
   } catch (err) {
@@ -324,7 +326,7 @@ app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
     if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
       return res.status(403).json({ message: "Unauthorized." });
     }
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const result = await db
       .collection("comments")
       .find({
@@ -344,7 +346,7 @@ app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
     if (!text?.trim()) {
       return res.status(400).json({ message: "Comment text required." });
     }
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const result = await db
       .collection("comments")
       .updateOne(
@@ -365,7 +367,7 @@ app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
 app.delete("/comments/:id", verifyEcosystemToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const db = getDatabaseContext();
+    const db = await getDatabaseContext();
     const result = await db.collection("comments").deleteOne({
       _id: new ObjectId(id),
       userEmail: req.decodedIdentity.email,
@@ -387,15 +389,11 @@ app.get("/", (req, res) => {
 
 async function runServer() {
   try {
-    await client.connect();
-    dbContext = client.db("ideaVaultDB");
-    console.log("Successfully connected to MongoDB cluster.");
-
     app.listen(port, () => {
       console.log("Server node processing requests on port: " + port);
     });
   } catch (err) {
-    console.error("Server initialization blocked by database failure:", err);
+    console.error("Server initialization blocked:", err);
     process.exit(1);
   }
 }
