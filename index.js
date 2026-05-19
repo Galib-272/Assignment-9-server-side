@@ -30,7 +30,6 @@ const client = new MongoClient(uri, {
 
 let dbContext = null;
 
-// FIX: Establish persistent async serverless pooling context safely
 async function getDatabaseContext() {
   if (!dbContext) {
     await client.connect();
