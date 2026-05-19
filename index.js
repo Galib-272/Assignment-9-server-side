@@ -12,6 +12,7 @@ app.use(
     origin: [
       "http://localhost:3000",
       "https://assignment-9-client-side.vercel.app",
+      /\.vercel\.app$/,
     ],
     credentials: true,
   }),
@@ -391,7 +392,7 @@ async function runServer() {
     console.log("Successfully connected to MongoDB cluster.");
 
     app.listen(port, () => {
-      console.log(`Server node processing requests on port: ${port}`);
+      console.log("Server node processing requests on port: " + port);
     });
   } catch (err) {
     console.error("Server initialization blocked by database failure:", err);
