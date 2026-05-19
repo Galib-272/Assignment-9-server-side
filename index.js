@@ -7,16 +7,26 @@ require("dotenv").config();
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3000",
+      "https://assignment-9-client-side.vercel.app",
+    ],
+    credentials: true,
+  }),
+);
 app.use(express.json());
 
-const uri = process.env.MONGO_URI || `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.mongodb.net/?retryWrites=true&w=majority`;
+const uri =
+  process.env.MONGO_URI ||
+  `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.mongodb.net/?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
 });
 
 let dbContext = null;
@@ -40,19 +50,26 @@ function getDatabaseContext() {
 function verifyEcosystemToken(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "Access tokens missing from headers." });
+    return res
+      .status(401)
+      .json({ message: "Access tokens missing from headers." });
   }
   const token = authHeader.split(" ")[1];
-  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET || "fallback-secret", (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ message: "Expired or corrupt credential footprint." });
-    }
-    req.decodedIdentity = decoded;
-    next();
-  });
+  jwt.verify(
+    token,
+    process.env.ACCESS_TOKEN_SECRET || "fallback-secret",
+    (err, decoded) => {
+      if (err) {
+        return res
+          .status(403)
+          .json({ message: "Expired or corrupt credential footprint." });
+      }
+      req.decodedIdentity = decoded;
+      next();
+    },
+  );
 }
 
-// ✅ ADDED — Email/password login: verifies credentials and issues a vault token
 app.post("/jwt", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -62,21 +79,19 @@ app.post("/jwt", async (req, res) => {
 
     const db = getDatabaseContext();
     const userRecord = await db.collection("users").findOne({
-      email: { $regex: `^${email}$`, $options: "i" }
+      email: { $regex: `^${email}$`, $options: "i" },
     });
 
-    // If no user found, still issue token (your frontend handles auth via Better Auth)
-    // Adjust this block if you store hashed passwords and want strict verification
     const resolvedUser = userRecord || {
       email,
       name: email.split("@")[0],
-      image: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde"
+      image: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde",
     };
 
     const token = jwt.sign(
       { email: resolvedUser.email },
       process.env.ACCESS_TOKEN_SECRET || "fallback-secret",
-      { expiresIn: "7d" }
+      { expiresIn: "7d" },
     );
 
     res.json({ token, user: resolvedUser });
@@ -85,8 +100,6 @@ app.post("/jwt", async (req, res) => {
   }
 });
 
-// ✅ ADDED — Google OAuth: trusts Google-verified email, issues a vault token
-// Called by /auth/callback page after Google OAuth completes
 app.post("/jwt/google", async (req, res) => {
   try {
     const { email } = req.body;
@@ -96,21 +109,22 @@ app.post("/jwt/google", async (req, res) => {
 
     const db = getDatabaseContext();
 
-    // Upsert user so /users/profile works for Google users too
-    await db.collection("users").updateOne(
-      { email: { $regex: `^${email}$`, $options: "i" } },
-      { $setOnInsert: { email, createdAt: new Date() } },
-      { upsert: true }
-    );
+    await db
+      .collection("users")
+      .updateOne(
+        { email: { $regex: `^${email}$`, $options: "i" } },
+        { $setOnInsert: { email, createdAt: new Date() } },
+        { upsert: true },
+      );
 
     const userRecord = await db.collection("users").findOne({
-      email: { $regex: `^${email}$`, $options: "i" }
+      email: { $regex: `^${email}$`, $options: "i" },
     });
 
     const token = jwt.sign(
       { email },
       process.env.ACCESS_TOKEN_SECRET || "fallback-secret",
-      { expiresIn: "7d" }
+      { expiresIn: "7d" },
     );
 
     res.json({ token, user: userRecord });
@@ -127,19 +141,21 @@ app.get("/users/profile", verifyEcosystemToken, async (req, res) => {
     }
 
     if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
-      return res.status(403).json({ message: "Verification parameters mismatch." });
+      return res
+        .status(403)
+        .json({ message: "Verification parameters mismatch." });
     }
 
     const db = getDatabaseContext();
     const userRecord = await db.collection("users").findOne({
-      email: { $regex: `^${email}$`, $options: "i" }
+      email: { $regex: `^${email}$`, $options: "i" },
     });
 
     if (!userRecord) {
       return res.json({
         email,
         name: "Expert Innovator",
-        image: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde"
+        image: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde",
       });
     }
 
@@ -154,11 +170,15 @@ app.put("/users/profile", verifyEcosystemToken, async (req, res) => {
     const { email, name, image } = req.body;
 
     if (!email) {
-      return res.status(400).json({ message: "Target identity matrix signature required." });
+      return res
+        .status(400)
+        .json({ message: "Target identity matrix signature required." });
     }
 
     if (req.decodedIdentity.email.toLowerCase() !== email.toLowerCase()) {
-      return res.status(403).json({ message: "Identity adjustment transaction unauthorized." });
+      return res
+        .status(403)
+        .json({ message: "Identity adjustment transaction unauthorized." });
     }
 
     const db = getDatabaseContext();
@@ -166,14 +186,16 @@ app.put("/users/profile", verifyEcosystemToken, async (req, res) => {
     if (name) updatePayload.name = name.trim();
     if (image) updatePayload.image = image.trim();
 
-    await db.collection("users").updateOne(
-      { email: { $regex: `^${email}$`, $options: "i" } },
-      { $set: updatePayload },
-      { upsert: true }
-    );
+    await db
+      .collection("users")
+      .updateOne(
+        { email: { $regex: `^${email}$`, $options: "i" } },
+        { $set: updatePayload },
+        { upsert: true },
+      );
 
     const freshUserRecord = await db.collection("users").findOne({
-      email: { $regex: `^${email}$`, $options: "i" }
+      email: { $regex: `^${email}$`, $options: "i" },
     });
 
     res.json({ success: true, user: freshUserRecord });
@@ -182,7 +204,6 @@ app.put("/users/profile", verifyEcosystemToken, async (req, res) => {
   }
 });
 
-// ✅ ADDED — POST /ideas so users can submit new concepts
 app.post("/ideas", verifyEcosystemToken, async (req, res) => {
   try {
     const idea = req.body;
@@ -201,8 +222,6 @@ app.post("/ideas", verifyEcosystemToken, async (req, res) => {
 app.get("/ideas", async (req, res) => {
   try {
     const db = getDatabaseContext();
-
-    // ✅ ADDED — support ?search= and ?category= query params
     const { search, category } = req.query;
     const filter = {};
 
@@ -220,12 +239,13 @@ app.get("/ideas", async (req, res) => {
   }
 });
 
-// ✅ ADDED — GET single idea by ID for the idea detail page
 app.get("/ideas/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const db = getDatabaseContext();
-    const idea = await db.collection("ideas").findOne({ _id: new ObjectId(id) });
+    const idea = await db
+      .collection("ideas")
+      .findOne({ _id: new ObjectId(id) });
     if (!idea) return res.status(404).json({ message: "Concept not found." });
     res.json(idea);
   } catch (err) {
@@ -238,10 +258,9 @@ app.put("/ideas/:id", verifyEcosystemToken, async (req, res) => {
     const { id } = req.params;
     const updatePayload = req.body;
     const db = getDatabaseContext();
-    const result = await db.collection("ideas").updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updatePayload }
-    );
+    const result = await db
+      .collection("ideas")
+      .updateOne({ _id: new ObjectId(id) }, { $set: updatePayload });
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -252,14 +271,15 @@ app.delete("/ideas/:id", verifyEcosystemToken, async (req, res) => {
   try {
     const { id } = req.params;
     const db = getDatabaseContext();
-    const result = await db.collection("ideas").deleteOne({ _id: new ObjectId(id) });
+    const result = await db
+      .collection("ideas")
+      .deleteOne({ _id: new ObjectId(id) });
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-// ✅ ADDED — GET comments for a specific idea
 app.get("/comments", async (req, res) => {
   try {
     const { ideaId, email } = req.query;
@@ -270,7 +290,7 @@ app.get("/comments", async (req, res) => {
       filter.$or = [
         { userEmail: email },
         { email: email },
-        { authorEmail: email }
+        { authorEmail: email },
       ];
     }
     const result = await db.collection("comments").find(filter).toArray();
@@ -280,7 +300,6 @@ app.get("/comments", async (req, res) => {
   }
 });
 
-// ✅ ADDED — POST a new comment on an idea
 app.post("/comments", verifyEcosystemToken, async (req, res) => {
   try {
     const comment = req.body;
@@ -297,7 +316,6 @@ app.post("/comments", verifyEcosystemToken, async (req, res) => {
   }
 });
 
-// ✅ ADDED — GET comments by the logged-in user
 app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
   try {
     const { email } = req.query;
@@ -308,13 +326,12 @@ app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
     }
 
     const db = getDatabaseContext();
-    const result = await db.collection("comments").find({
-      $or: [
-        { userEmail: email },
-        { email: email },
-        { authorEmail: email }
-      ]
-    }).toArray();
+    const result = await db
+      .collection("comments")
+      .find({
+        $or: [{ userEmail: email }, { email: email }, { authorEmail: email }],
+      })
+      .toArray();
 
     res.json(result);
   } catch (err) {
@@ -322,9 +339,6 @@ app.get("/my-comments", verifyEcosystemToken, async (req, res) => {
   }
 });
 
-// ✅ ADD these three routes to server.js
-
-// PUT /comments/:id — edit a comment
 app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -336,12 +350,14 @@ app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
     const result = await db.collection("comments").updateOne(
       {
         _id: new ObjectId(id),
-        userEmail: req.decodedIdentity.email, // ✅ only owner can edit
+        userEmail: req.decodedIdentity.email,
       },
-      { $set: { text: text.trim() } }
+      { $set: { text: text.trim() } },
     );
     if (result.matchedCount === 0) {
-      return res.status(403).json({ message: "Comment not found or unauthorized." });
+      return res
+        .status(403)
+        .json({ message: "Comment not found or unauthorized." });
     }
     res.json({ success: true });
   } catch (err) {
@@ -349,17 +365,18 @@ app.put("/comments/:id", verifyEcosystemToken, async (req, res) => {
   }
 });
 
-// DELETE /comments/:id — delete a comment
 app.delete("/comments/:id", verifyEcosystemToken, async (req, res) => {
   try {
     const { id } = req.params;
     const db = getDatabaseContext();
     const result = await db.collection("comments").deleteOne({
       _id: new ObjectId(id),
-      userEmail: req.decodedIdentity.email, // ✅ only owner can delete
+      userEmail: req.decodedIdentity.email,
     });
     if (result.deletedCount === 0) {
-      return res.status(403).json({ message: "Comment not found or unauthorized." });
+      return res
+        .status(403)
+        .json({ message: "Comment not found or unauthorized." });
     }
     res.json({ success: true });
   } catch (err) {
